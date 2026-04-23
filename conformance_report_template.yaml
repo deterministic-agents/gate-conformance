@@ -1,0 +1,148 @@
+# GATE Conformance Report — Template
+# Version: 1.0
+# Fill this out for each environment and autonomy tier you operate.
+# Submit as part of architecture review, audit, or change control.
+
+report:
+  generated_at: "YYYY-MM-DDTHH:MM:SSZ"
+  generated_by: ""          # Name/team
+  gate_version: "1.2.8"
+  report_version: "1.0"
+  environment: ""           # dev | test | prod
+  autonomy_tier: ""         # sandbox | bounded | high_privilege
+  assessment_period:
+    from: "YYYY-MM-DD"
+    to:   "YYYY-MM-DD"
+
+deployment:
+  cloud_provider: ""        # aws | azure | gcp | on_prem | hybrid
+  regions: []
+  agent_count: 0            # Total agent types in this environment
+  tool_count: 0             # Total registered tools
+
+# Required checks by tier:
+#   sandbox:       Check04, Check08, Check12
+#   bounded:       all sandbox + Check01-03, Check05-08, Check10-13
+#   high_privilege: all bounded + Check09, Check14, Check15
+
+checks:
+  - check_id: Check01
+    status: ""              # PASS | FAIL | NOT_APPLICABLE
+    evidence_refs: []       # URIs or identifiers for evidence artifacts
+    notes: ""
+    remediation: ""         # If FAIL: describe remediation plan and target date
+
+  - check_id: Check02
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check03
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check04
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check05
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check06
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check07
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check08
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check09
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check10
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check11
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check12
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check13
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check14
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+  - check_id: Check15
+    status: ""
+    evidence_refs: []
+    notes: ""
+    remediation: ""
+
+metrics:
+  # Operational metrics supporting conformance claims.
+  # Collect from your observability pipeline.
+  tool_calls_without_policy_decision_record: 0   # Target: 0
+  bypass_detections:                           0   # Target: 0
+  attestation_coverage_pct:                    0   # Target: 100
+  ledger_integrity_status:                    ""   # PASS | FAIL
+  replay_success_rate_pct:                     0   # Target: >= 95
+  breaker_containment_slo_met_pct:             0   # Target: >= 99
+  high_impact_signature_coverage_pct:          0   # Target: 100
+  hitl_required_without_approval:             0   # Target: 0
+  cross_tenant_memory_violations:              0   # Target: 0
+
+retention_profile:
+  hot_store:   ""   # e.g., BigQuery, 365 days
+  cold_store:  ""   # e.g., GCS Coldline WORM, 6 years
+  profile_declared: ""   # sandbox_hot_30d | prod_hot_365d | regulated_cold_7y_plus
+
+summary:
+  must_pass_checks_total: 0
+  must_pass_checks_passing: 0
+  must_pass_checks_failing: 0
+  open_remediations: 0
+  overall_status: ""   # CONFORMANT | NON_CONFORMANT | PARTIAL
+  attestation: >
+    This report reflects a manual self-assessment against GATE v1.2.8 conformance
+    checks. It does not constitute a formal audit or compliance certification.
+    Assessor: [name]
+    Reviewed by: [name]
+    Date: [date]

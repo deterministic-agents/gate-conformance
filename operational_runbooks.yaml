@@ -1,0 +1,697 @@
+# GATE Day-2 Operational Runbooks — Minimum Set
+# Version: 1.0 — compatible with GATE v1.2.8
+#
+# These runbooks are normative starting points. Adapt them to your
+# incident management tooling, on-call rotation, and escalation paths.
+#
+# Each runbook follows the structure:
+#   Trigger       — what causes this runbook to be invoked
+#   Severity      — P1/P2/P3 classification
+#   Owner         — who is responsible for execution
+#   Steps         — ordered, actionable steps
+#   Evidence      — what must be captured
+#   Exit criteria — how you know the runbook is complete
+#   Escalation    — who to call if stuck
+
+---
+
+# ═══════════════════════════════════════════════════════════════════
+# RUNBOOK 1: Break-Glass Stop and Containment
+# ═══════════════════════════════════════════════════════════════════
+
+runbook_01:
+  id: RB-01
+  title: Break-Glass Stop and Containment
+  trigger: |
+    Any of the following:
+    - Suspected prompt injection or agent compromise
+    - Runaway execution (loop, cost spike, anomalous tool pattern)
+    - Unsafe or unauthorized tool actions detected
+    - Evidence integrity failure (ledger hash chain break)
+    - Manual escalation from monitoring alert
+  severity: P1
+  owner: On-call SRE + Security Engineering
+  slo:
+    time_to_contain: 5 minutes from detection to side effects halted
+    time_to_notify: 15 minutes from detection to stakeholder notification
+
+  steps:
+
+    - step: 1
+      action: Activate break-glass stop at the Tool Gateway
+      detail: |
+        Option A — Global stop (all agents in environment):
+          gate-control stop --env prod --scope all --reason "incident-<TICKET_ID>"
+
+        Option B — Agent-specific stop:
+          gate-control stop --env prod --agent-id <agent_instance_id> --reason "incident-<TICKET_ID>"
+
+        Option C — If CLI unavailable, use cloud console:
+          AWS:   Revoke the gateway IAM role's tool backend access via SCP
+          Azure: Disable the gateway Managed Identity in Azure AD
+          GCP:   Remove gateway service account IAM bindings on tool backends
+
+        Confirm: Attempt a test tool call — it must return denied.
+        Measure: Record time from command to confirmed denial (target: < 5s)
+      evidence_capture:
+        - stop_activation_command and timestamp
+        - confirmation of first denied tool call post-stop
+        - containment_timing_ms
+
+    - step: 2
+      action: Freeze orchestration queues
+      detail: |
+        Halt all pending runs and retries in the orchestrator.
+          gate-control pause-orchestrator --env prod
+
+        Or pause the relevant queue/job scheduler directly:
+          AWS:   Suspend SQS queue processing or ECS task execution
+          Azure: Pause Logic App or AKS job scheduler
+          GCP:   Pause Cloud Tasks queue or GKE CronJob
+
+        Do not drain the queue — preserve the pending work items as evidence.
+      evidence_capture:
+        - orchestrator_pause_confirmation
+        - list of paused run_ids
+
+    - step: 3
+      action: Snapshot evidence before any state changes
+      detail: |
+        Capture evidence pointers for all affected runs BEFORE revoking
+        identities or rotating credentials. Order matters — revocation
+        may affect your ability to query some evidence stores.
+
+        For each affected run_id:
+          1. Export policy decision records
+          2. Export ledger events (verify hash chain intact up to stop point)
+          3. Export replay trace and snapshot URIs
+          4. Export semantic traces
+          5. Export breaker trigger event
+
+        Store snapshots to incident-specific immutable path:
+          worm://incidents/<TICKET_ID>/evidence/
+      evidence_capture:
+        - incident_evidence_bundle at worm://incidents/<TICKET_ID>/
+        - ledger_integrity_report at time of snapshot
+
+    - step: 4
+      action: Revoke affected workload identities
+      detail: |
+        Revoke the identity of the compromised or misbehaving agent instance.
+        This is the primary containment mechanism — revocation must propagate
+        to all gateways within the token TTL (typically 15 minutes max).
+
+          gate-identity revoke --subject <agent_instance_id> --env prod
+
+        Verify: Subsequent requests from the revoked identity are denied.
+        Record propagation time (target: < TTL of short-lived token).
+
+        If shared service accounts were in use (failure mode for C01):
+          Rotate the shared credential immediately and remediate to
+          per-instance identities before re-enabling any agents.
+      evidence_capture:
+        - revocation_event with propagation_time_seconds
+        - denial_confirmation post-revocation
+
+    - step: 5
+      action: Notify stakeholders
+      detail: |
+        Within 15 minutes of detection:
+        - On-call: already engaged (step 1)
+        - Security Engineering lead
+        - Platform Engineering lead
+        - CISO / Security leadership (if data exposure suspected)
+        - Legal / Compliance (if regulated data involved)
+
+        Open incident ticket with:
+        - Trigger description
+        - Affected agent_instance_ids and run_ids
+        - Actions taken and timestamps
+        - Evidence bundle URI
+        - Current status (contained / investigating / escalated)
+
+    - step: 6
+      action: Determine root cause (do not re-enable until complete)
+      detail: |
+        Use the replay procedure (RB-03) to reconstruct what happened.
+        Answer:
+          1. What was the first anomalous action?
+          2. Was this a prompt injection, hallucination, or logic error?
+          3. Did any invariants fire (check for invariant_halt events)?
+          4. Did any policy obligations go unenforced?
+          5. Was there a bypass path used?
+
+        Do not re-enable the agent until root cause is confirmed and
+        a remediation plan is documented.
+
+  exit_criteria:
+    - Side effects confirmed halted (zero tool calls post-stop)
+    - Evidence bundle captured and integrity verified
+    - Affected identities revoked
+    - Stakeholders notified within SLO
+    - Incident ticket open with status CONTAINED
+
+  escalation:
+    if_containment_not_achieved_in_5m: Engage cloud provider support for emergency IAM revocation
+    if_data_exfiltration_suspected: Engage legal, compliance, and DPO immediately
+
+
+---
+
+# ═══════════════════════════════════════════════════════════════════
+# RUNBOOK 2: Policy Bundle Rollback
+# ═══════════════════════════════════════════════════════════════════
+
+runbook_02:
+  id: RB-02
+  title: Policy Bundle Rollback
+  trigger: |
+    - Policy change causes unexpected denials (agent behavior broken)
+    - Policy change causes unexpected allows (safety regression)
+    - Policy bundle integrity check fails
+    - Conformance check failure after policy update
+  severity: P2 (P1 if safety regression — unexpected allows)
+  owner: Platform Engineering + Security Engineering
+
+  steps:
+
+    - step: 1
+      action: Identify the bad policy bundle
+      detail: |
+        Find the policy_bundle_hash in recent policy decision records
+        that correlates with the onset of the problem:
+
+          SELECT policy_bundle_hash, MIN(time) AS first_seen, COUNT(*) AS decisions
+          FROM gate_policy_decisions
+          WHERE environment = 'prod'
+            AND time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)
+          GROUP BY policy_bundle_hash
+          ORDER BY first_seen DESC
+          LIMIT 5;
+
+        Identify the hash that was deployed at the time the problem started.
+      evidence_capture:
+        - bad_policy_bundle_hash
+        - deployment timestamp of the bad bundle
+
+    - step: 2
+      action: Identify last known good bundle
+      detail: |
+        Retrieve the policy_bundle_hash from policy decisions immediately
+        BEFORE the problem onset. Verify the bundle file exists in your
+        policy artifact store and its hash matches.
+
+          gate-policy list --env prod --history 10
+
+        Verify signature:
+          gate-policy verify --bundle-hash <last_known_good_hash>
+
+        Expected: VALID signature, hash matches stored bundle file.
+      evidence_capture:
+        - last_known_good_policy_bundle_hash
+        - signature_verification_result: VALID
+
+    - step: 3
+      action: Roll back the policy bundle
+      detail: |
+        Deploy the last known good bundle to the Tool Gateway:
+          gate-policy deploy --bundle-hash <last_known_good_hash> --env prod
+
+        The gateway must pick up the new bundle within its policy refresh interval
+        (typically < 60 seconds for OPA with bundle polling).
+
+        Confirm: policy_bundle_hash in the next policy decision record matches
+        the rolled-back hash.
+      evidence_capture:
+        - rollback_deployment_record
+        - first_decision_with_restored_bundle_hash
+
+    - step: 4
+      action: Run must-pass conformance checks
+      detail: |
+        After rollback, run the following checks to confirm restored behavior:
+          - Check01: No tool calls without policy decision record
+          - Check02: No bypass paths
+          - Check04: Schema validation working
+          - Check08: Budgets enforced
+          - Check13: Policy bundle hash pinning
+
+        Using the self-assessment procedure or automated runner if available.
+      evidence_capture:
+        - conformance_check_results post-rollback (all must PASS)
+
+    - step: 5
+      action: Document and prevent recurrence
+      detail: |
+        Open a change record with:
+        - Bad bundle hash and what changed
+        - Root cause (logic error, missing test coverage, incorrect allowlist)
+        - Rollback action and timing
+        - Remediation: fix the policy, add a test case that would have caught it,
+          re-test, re-deploy via normal change control
+
+        Update the policy test suite (tool_gateway_baseline_test.rego) with
+        a new test that would have caught this regression.
+
+  exit_criteria:
+    - Last known good policy bundle deployed
+    - Conformance checks passing
+    - ABOM updated with new policy_bundle_hash
+    - Change record closed with root cause documented
+
+
+---
+
+# ═══════════════════════════════════════════════════════════════════
+# RUNBOOK 3: Incident Replay Procedure
+# ═══════════════════════════════════════════════════════════════════
+
+runbook_03:
+  id: RB-03
+  title: Incident Replay Procedure
+  trigger: |
+    - Investigating a run that performed or attempted a high-impact action
+    - Debugging a non-deterministic failure that cannot be reproduced live
+    - Validating a fix before re-enabling a suspended agent
+    - Audit or regulatory investigation requiring reconstructed evidence
+  severity: P2
+  owner: Platform Engineering + Security Engineering
+
+  steps:
+
+    - step: 1
+      action: Locate the run
+      detail: |
+        Identify the run_id and trace_id. These should be in:
+        - The incident ticket (if from RB-01)
+        - Alert metadata from your observability pipeline
+        - Direct query:
+
+          SELECT run_id, trace_id, agent_instance_id, MIN(time) AS run_start
+          FROM gate_tool_requests
+          WHERE environment = 'prod'
+            AND time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+            AND (
+              tool_category IN ('financial', 'irreversible_write', 'infrastructure')
+              OR decision = 'invariant_halt'
+            )
+          GROUP BY run_id, trace_id, agent_instance_id
+          ORDER BY run_start DESC
+          LIMIT 20;
+      evidence_capture:
+        - run_id and trace_id under investigation
+
+    - step: 2
+      action: Retrieve replay trace and verify completeness
+      detail: |
+        Retrieve the replay trace:
+          gate-replay fetch --run-id <run_id> --output /tmp/replay_trace.yaml
+
+        Verify the trace is complete:
+        - All tool call steps have request_hash, response_hash, and snapshot_uri
+        - All invariant_halt steps have invariant_rule_id
+        - Model config (model_id, model_version, temperature, seed) is recorded
+        - Bundle hashes (policy, prompt, tool schema) are present
+
+        If snapshots are missing for high-impact tools, the trace cannot be
+        fully replayed. Document the gap and reconstruct from ledger events.
+      evidence_capture:
+        - replay_trace.yaml
+        - completeness_check_result
+
+    - step: 3
+      action: Execute replay in mock mode
+      detail: |
+        Run the replay harness against the captured trace. Use mock_all mode
+        to serve all tool responses from snapshots (no live dependencies):
+
+          gate-replay run \
+            --trace /tmp/replay_trace.yaml \
+            --mode mock_all \
+            --output /tmp/replay_report.yaml
+
+        The harness will:
+        1. Load the pinned model config and bundle hashes
+        2. Serve tool responses from snapshot_uris
+        3. Re-evaluate policy decisions against the pinned policy bundle
+        4. Compare output request_hash and response_hash to recorded values
+
+        Expected output:
+          steps_total: N
+          steps_matched: N     # must equal steps_total
+          steps_mismatched: 0  # any mismatch = replay failure
+          replay_status: PASS
+      evidence_capture:
+        - replay_report.yaml
+        - replay_status: PASS (or document why FAIL)
+
+    - step: 4
+      action: Analyze the replay results
+      detail: |
+        For each step in the replay report:
+        - tool_call steps: verify request_hash and response_hash match
+        - invariant_halt steps: identify which rule fired and why
+        - tool_deny steps: identify reason codes from policy decision
+        - hitl_gate steps: confirm approval record exists and is signed
+
+        If replay status is PASS but the incident still occurred, the issue
+        is in the control plane enforcement (obligation ignored, bypass path,
+        signing failure) — not in the model's reasoning.
+
+        If replay status is FAIL (hash mismatch), investigate:
+        - Did canonicalization differ between components? (hash drift, C09 failure mode)
+        - Were snapshots modified after capture? (integrity issue, C11)
+        - Did the bundle hash differ from what ran? (supply chain issue, C03)
+      evidence_capture:
+        - step-by-step replay analysis
+        - root cause determination
+
+    - step: 5
+      action: Validate the fix using replay
+      detail: |
+        Once a fix is proposed (policy change, invariant update, code fix):
+        1. Apply the fix in a non-production environment
+        2. Re-run the replay against the incident trace:
+             gate-replay run --trace /tmp/replay_trace.yaml --mode mock_all \
+               --policy-bundle-override <fixed_bundle_hash>
+        3. Confirm the fix would have prevented the incident:
+             - invariant_halt or deny at the relevant step
+             - No unsafe tool execution in the replay output
+        4. Add the trace to your regression suite
+
+  exit_criteria:
+    - Replay report produced with status PASS
+    - Root cause documented in incident ticket
+    - Fix validated via replay before re-enabling agent
+    - Incident trace added to regression suite
+
+
+---
+
+# ═══════════════════════════════════════════════════════════════════
+# RUNBOOK 4: HITL Gate Outage and Reconciliation
+# ═══════════════════════════════════════════════════════════════════
+
+runbook_04:
+  id: RB-04
+  title: HITL Gate Outage and Reconciliation
+  trigger: |
+    - HITL approval service is unavailable (timeout, error, infrastructure issue)
+    - Approvers are unavailable and time-sensitive work is blocked
+    - HITL approval records are missing or unsigned in the ledger
+    - Approval latency SLO breached (> defined threshold)
+  severity: P2
+  owner: Platform Engineering + Business Process Owner
+
+  behavior_when_hitl_unavailable: |
+    GATE's fail-closed principle applies: if the HITL service is unavailable
+    and a tool call requires HITL, the tool call MUST be denied.
+    The gateway must NOT proceed in "degraded" mode without approval.
+    This is not a bug — it is the correct safe behavior.
+
+  steps:
+
+    - step: 1
+      action: Confirm HITL service status
+      detail: |
+        Check HITL approval service health:
+          curl -f https://hitl-service.internal/health
+
+        Check for upstream dependencies:
+        - Identity/auth service (approvers cannot authenticate without it)
+        - Notification service (approvers may not know they have pending items)
+        - Database backing the approval records
+
+        Determine: Is this an outage or a capacity/process issue?
+      evidence_capture:
+        - hitl_service_health_check_result
+        - upstream_dependency_status
+
+    - step: 2
+      action: Handle blocked agents during outage
+      detail: |
+        During HITL service outage, agents requiring HITL will be denied.
+        This is correct behavior. Options depending on business impact:
+
+        Option A — Wait for HITL service recovery (preferred for high-impact tools)
+          No action needed. Agents will retry when the service recovers.
+          Monitor queue depth in the orchestrator.
+
+        Option B — Temporarily lower the HITL obligation threshold (if safe)
+          Only applicable if the blocked tools are low-risk and the HITL
+          requirement is driven by ORM score, not tool category.
+          Requires: policy bundle update + change approval + CISO sign-off.
+          Do NOT do this for financial or irreversible_write tools.
+
+        Option C — Escalate to manual processing outside the agent system
+          For time-critical financial operations: route to human operators
+          via your existing manual payment/approval process.
+          Document all manual actions in the incident ticket.
+      evidence_capture:
+        - chosen_option and justification
+        - list of blocked run_ids during outage period
+
+    - step: 3
+      action: Restore HITL service
+      detail: |
+        After identifying the root cause, restore the HITL service.
+        Verify:
+          1. Health endpoint returns 200
+          2. Pending approval requests are visible to approvers
+          3. A test approval round-trip completes successfully:
+               - Submit a test approval request
+               - Approve via the UI/API
+               - Verify signed HITL decision record is emitted
+               - Verify ledger event linked to approval_id
+
+    - step: 4
+      action: Reconcile missed approvals
+      detail: |
+        Identify all tool calls that were denied due to HITL outage:
+
+          SELECT run_id, tool_name, time, reason_codes
+          FROM gate_policy_decisions
+          WHERE environment = 'prod'
+            AND 'HITL_REQUIRED' IN UNNEST(reason_codes)
+            AND decision = 'deny'
+            AND time BETWEEN '<outage_start>' AND '<outage_end>';
+
+        For each denied action:
+        - If the work is still needed: re-trigger the agent run — it will
+          request HITL approval through the restored service
+        - If the work was handled manually: document the manual action
+          in the incident ticket and link to the original deny record
+
+    - step: 5
+      action: Address approval fatigue proactively
+      detail: |
+        If this runbook was triggered by approver unavailability (not outage):
+        Review your HITL obligation configuration:
+        - Are low-risk tools unnecessarily triggering HITL?
+        - Is the ORM threshold for HITL too low for your traffic volume?
+        - Do you have enough approvers with appropriate coverage hours?
+
+        Consult: Artifact A7 (ORM Risk Model Worksheet) tuning guidance.
+        Mitigation: Raise auto_execute or add_verification thresholds for
+        low-risk tools. Reduce HITL to high-impact categories only.
+
+  exit_criteria:
+    - HITL service restored and health check passing
+    - All blocked run_ids reconciled (re-triggered or manually resolved)
+    - Missed approval records documented in incident ticket
+    - Recurrence prevention plan documented
+
+
+---
+
+# ═══════════════════════════════════════════════════════════════════
+# RUNBOOK 5: Invariant Bundle Update
+# ═══════════════════════════════════════════════════════════════════
+
+runbook_05:
+  id: RB-05
+  title: Invariant Bundle Update
+  trigger: |
+    - New high-impact tool added to the allowlist (requires invariant coverage)
+    - Financial limits need adjustment
+    - New destination allowlist entries required
+    - Run limit needs tuning based on operational data
+    - Invariant bundle hash drift detected (hash mismatch in evidence)
+  severity: P2
+  owner: Security Engineering + Platform Engineering
+  change_control: |
+    Invariant bundle changes require a HIGHER approval bar than policy bundle
+    changes. Required approvals before deployment:
+    - Security Engineering lead
+    - CISO (or delegate) for financial or delete-class invariants
+    - Change record in ITSM with hash before/after documented
+
+  steps:
+
+    - step: 1
+      action: Draft and review the invariant change
+      detail: |
+        Edit invariants_baseline.rego (or your invariant bundle file).
+        For each new or changed invariant:
+        - State the rule_id (INV-<CATEGORY>-<NUMBER>)
+        - Define the boolean condition clearly
+        - Add a test case in the invariant test file
+        - Confirm the test FAILS before the fix and PASSES after
+
+        IMPORTANT: Verify the new invariant does NOT conflict with
+        existing policy allowlists. An invariant that always fires
+        will deny all tools in that category regardless of policy.
+      evidence_capture:
+        - invariant_change_diff
+        - test_results showing new test PASS
+
+    - step: 2
+      action: Run full policy + invariant test suite
+      detail: |
+        Run all tests together to catch interactions:
+          opa test policies/ -v
+
+        Expected: All tests PASS.
+        If any existing tests FAIL after adding the new invariant:
+        - Review whether the failure reveals a real safety issue
+        - Update the test if the invariant is intentionally stricter
+        - Never relax an invariant to make a test pass
+
+    - step: 3
+      action: Deploy to non-production and observe
+      detail: |
+        Deploy the updated invariant bundle to a staging environment.
+        Run a representative set of agent workflows and confirm:
+        - Expected tool calls proceed (no false positives)
+        - Invariant-violating test cases are halted
+        - invariant_check_records appear in evidence with correct rule_ids
+
+        Minimum soak time: 24 hours in staging before production.
+
+    - step: 4
+      action: Hash the new bundle and update ABOM
+      detail: |
+        Compute the hash of the updated invariant bundle file:
+          sha256sum policies/invariants_baseline.rego
+          # or for a bundle archive:
+          sha256sum gate-invariants-v1.1.tar.gz
+
+        Update the invariant_bundle_hash in every ABOM that uses this bundle.
+        Increment the agent version in the ABOM.
+        Commit the ABOM changes with the change record reference.
+
+    - step: 5
+      action: Deploy to production with change record
+      detail: |
+        Deploy the new invariant bundle to production:
+          gate-policy deploy-invariants \
+            --bundle-hash <new_invariant_bundle_hash> \
+            --env prod \
+            --change-record <ITSM_TICKET_ID>
+
+        Verify: First policy decision records in production show the new
+        invariant_bundle_hash.
+
+        Monitor for 1 hour: Check for unexpected invariant_halt events.
+        If false positives appear, roll back using RB-02 procedure
+        (adapted for invariant bundle rather than policy bundle).
+
+  exit_criteria:
+    - New invariant bundle deployed and hash matches in evidence
+    - All affected ABOMs updated with new invariant_bundle_hash
+    - No unexpected invariant_halt events in first hour post-deployment
+    - Change record closed with before/after hashes documented
+
+
+---
+
+# ═══════════════════════════════════════════════════════════════════
+# RUNBOOK 6: Agent Decommission
+# ═══════════════════════════════════════════════════════════════════
+
+runbook_06:
+  id: RB-06
+  title: Agent Decommission
+  trigger: |
+    - Agent purpose is complete and it is no longer needed
+    - Agent is being replaced by a newer version
+    - Agent is being suspended pending investigation (use RB-01 first)
+    - Scheduled review cycle determines agent should be retired
+  severity: P3 (routine)
+  owner: Agent owner team + Platform Engineering
+
+  steps:
+
+    - step: 1
+      action: Verify no active runs
+      detail: |
+        Confirm the agent has no in-flight runs:
+          SELECT run_id, MIN(time) AS run_start, MAX(time) AS last_activity
+          FROM gate_tool_requests
+          WHERE agent_instance_id LIKE 'spiffe://org/agent/<agent_name>%'
+            AND environment = 'prod'
+            AND time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
+          GROUP BY run_id;
+
+        If active runs exist: wait for completion or trigger quiesce
+        (disables side effects but preserves evidence capture).
+
+    - step: 2
+      action: Quiesce the agent
+      detail: |
+        Set the agent to quiesce mode — side-effecting tool calls are denied
+        but observability and evidence emission continue:
+          gate-control quiesce --agent <agent_name> --env prod
+
+        Quiesce allows in-flight read-only operations to complete cleanly.
+        Wait 5 minutes before proceeding to revocation.
+
+    - step: 3
+      action: Revoke workload identity
+      detail: |
+        Revoke all identity tokens for the agent:
+          gate-identity revoke --subject spiffe://org/agent/<agent_name>
+
+        Verify: new tool calls from this identity are denied.
+        Record revocation event with timestamp.
+
+    - step: 4
+      action: Archive audit and replay artifacts
+      detail: |
+        Move all evidence for this agent to the cold archive:
+          gate-evidence archive \
+            --agent <agent_name> \
+            --retention-class prod_cold_6y_worm \
+            --output worm://archive/decommissioned/<agent_name>/
+
+        Confirm: archive job completes, WORM retention lock applied,
+        integrity check PASS on archived evidence.
+
+    - step: 5
+      action: Update agent inventory
+      detail: |
+        Mark the agent as DECOMMISSIONED in your agent inventory:
+        - Status: decommissioned
+        - Decommissioned at: <timestamp>
+        - Decommissioned by: <operator>
+        - Archive URI: worm://archive/decommissioned/<agent_name>/
+        - Change record: <ITSM_TICKET_ID>
+
+        Remove the agent from all allowlists in the policy bundle.
+        Remove from the Tool Authorization Matrix.
+        Update policy bundle hash in ABOM (or mark ABOM as retired).
+
+    - step: 6
+      action: Disable and remove infrastructure
+      detail: |
+        - Delete or disable the agent container image from the registry
+        - Remove the agent from Kubernetes deployments / Cloud Run services
+        - Clean up any agent-specific secrets in the secrets manager
+        - Remove agent-specific network policy rules
+
+  exit_criteria:
+    - All workload identity tokens revoked
+    - Evidence archived to WORM cold store with integrity check PASS
+    - Agent removed from policy allowlists and tool auth matrix
+    - Agent inventory updated to DECOMMISSIONED status
+    - Infrastructure resources cleaned up

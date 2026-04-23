@@ -1,0 +1,434 @@
+# GATE Conformance Self-Assessment
+# Version: 1.0 — compatible with GATE v1.2.8
+#
+# Use this document as your manual verification baseline until the
+# automated conformance runner is released (GATE v1.3).
+#
+# How to use:
+#   1. Work through each check for your declared autonomy tier.
+#   2. Collect the required evidence for each passing check.
+#   3. Produce a conformance report (see conformance_report_template.yaml).
+#   4. Review failing checks and open remediation items.
+#
+# Tiers:
+#   sandbox    — lowest risk; reduced evidence requirements
+#   bounded    — default enterprise production (must pass all bounded checks)
+#   high_privilege — regulated/high-consequence (must pass all checks)
+#
+# Status values: PASS | FAIL | NOT_APPLICABLE | PENDING
+
+---
+
+# ─────────────────────────────────────────────────────────
+# CHECK 01 — No tool execution without policy decision record
+# Control: C05
+# Tiers: bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_01:
+  id: Check01
+  title: No tool execution without policy decision record
+  control: C05
+  tiers: [bounded, high_privilege]
+  question: >
+    For every tool call in the last 30-day period, does a policy_decision_record
+    exist with a matching request_hash?
+  test_procedure: |
+    Query your evidence store:
+      SELECT count(*) FROM tool_requests t
+      LEFT JOIN policy_decisions p ON t.request_hash = p.request_hash
+      WHERE p.decision_id IS NULL
+      AND t.environment = 'prod'
+      AND t.time > NOW() - INTERVAL 30 DAY;
+    Expected result: 0 rows.
+  pass_criteria: "Zero tool invocations without a correlated policy decision record"
+  evidence_required:
+    - query_result_showing_zero_unmatched_tool_calls
+    - sample_policy_decision_records (5+ from last 30 days)
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 02 — No bypass paths to tools
+# Control: C05
+# Tiers: bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_02:
+  id: Check02
+  title: No bypass paths to tools
+  control: C05
+  tiers: [bounded, high_privilege]
+  question: >
+    Can the agent runtime identity directly invoke tool backends or data stores
+    without traversing the Tool Gateway?
+  test_procedure: |
+    1. Network: Verify agent runtime pods/containers have no egress route to tool
+       backend endpoints (ERP, CRM, external APIs) except via gateway CIDR.
+       Test: attempt curl from agent runtime to tool backend — expect timeout/deny.
+    2. IAM: Verify agent workload identity has no direct IAM permissions on tool
+       backends. Run: list IAM bindings for agent service account.
+       Expected: no bindings on tool backend resources.
+    3. SDK: Verify no direct tool SDK calls in agent codebase.
+       Run: grep -r "direct_tool_client\|bypass_gateway" src/
+       Expected: zero matches.
+  pass_criteria: "Network, IAM, and SDK bypass attempts all fail"
+  evidence_required:
+    - network_policy_egress_rules_screenshot
+    - iam_binding_audit_output
+    - codebase_grep_result
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 03 — Verified workload identity on every privileged request
+# Control: C01
+# Tiers: bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_03:
+  id: Check03
+  title: Verified workload identity on every privileged request
+  control: C01
+  tiers: [bounded, high_privilege]
+  question: >
+    Does every tool and memory request include a verified agent_instance_id with
+    attestation status logged?
+  test_procedure: |
+    Query attestation logs:
+      SELECT
+        COUNT(*) AS total_requests,
+        SUM(CASE WHEN attested = true THEN 1 ELSE 0 END) AS attested_count
+      FROM tool_gateway_logs
+      WHERE environment = 'prod'
+      AND time > NOW() - INTERVAL 7 DAY;
+    Expected: attested_count / total_requests = 1.0 (100%)
+  pass_criteria: "100% of privileged requests include verified agent_instance_id + attestation"
+  evidence_required:
+    - attestation_coverage_metric (target: 100%)
+    - sample_attestation_logs
+    - revocation_test_result (verify revocation blocks new tool calls within 60s)
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 04 — Schema validation for tool inputs
+# Control: C05
+# Tiers: sandbox, bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_04:
+  id: Check04
+  title: Schema validation for tool inputs
+  control: C05
+  tiers: [sandbox, bounded, high_privilege]
+  question: >
+    Does the Tool Gateway reject malformed or free-text tool inputs that do not
+    conform to the registered tool schema?
+  test_procedure: |
+    Send three malformed tool requests to the gateway:
+      1. Missing required field (e.g., missing contact_id for crm.update_contact)
+      2. Wrong type (e.g., amount_usd as string instead of number)
+      3. Unregistered tool name (e.g., "tool_that_doesnt_exist")
+    Expected: all three return HTTP 422 / policy decision "deny" with
+    reason_code "SCHEMA_INVALID". Confirm no tool execution occurred.
+  pass_criteria: "All three malformed inputs rejected before tool execution"
+  evidence_required:
+    - schema_validation_reject_logs_for_test_cases
+    - confirm_no_tool_execution_on_reject
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 05 — Immutable, tamper-evident audit ledger
+# Control: C11
+# Tiers: bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_05:
+  id: Check05
+  title: Immutable, tamper-evident audit ledger
+  control: C11
+  tiers: [bounded, high_privilege]
+  question: >
+    Is the audit ledger hash-chained, signed, committed to WORM storage, and
+    does the integrity verifier report PASS?
+  test_procedure: |
+    1. Run ledger integrity verification:
+       Expected output: PASS — all hash chain links valid, no gaps in sequence_numbers.
+    2. Attempt to modify a ledger event (in a test environment):
+       Expected: integrity verifier reports FAIL and identifies the tampered event.
+    3. Confirm WORM retention policy is active on the cold store bucket.
+  pass_criteria: |
+    Integrity verifier returns PASS.
+    Tamper simulation detected correctly.
+    WORM retention confirmed on cold store.
+  evidence_required:
+    - integrity_verification_report (PASS)
+    - tamper_detection_test_result
+    - worm_storage_retention_policy_screenshot
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 06 — Deterministic replay reproduces an incident run
+# Control: C10
+# Tiers: bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_06:
+  id: Check06
+  title: Deterministic replay reproduces an incident run
+  control: C10
+  tiers: [bounded, high_privilege]
+  question: >
+    Given a captured replay trace for a bounded-tier run, does the replay
+    harness reproduce the same tool/memory operations with matching hashes?
+  test_procedure: |
+    1. Select a production run_id from the last 7 days.
+    2. Retrieve its replay trace and all snapshot_uris.
+    3. Execute replay harness in mock_all mode:
+         gate-replay --trace <trace_id> --mode mock_all
+    4. Compare output: request_hash and response_hash for each tool step
+       must match the original trace.
+    Expected: PASS — all step hashes match.
+  pass_criteria: "Replay success rate >= 95% across sampled runs"
+  evidence_required:
+    - replay_report_showing_hash_match
+    - replay_success_rate_metric
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 07 — Circuit breakers stop side effects
+# Control: C06
+# Tiers: bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_07:
+  id: Check07
+  title: Circuit breakers stop side effects
+  control: C06
+  tiers: [bounded, high_privilege]
+  question: >
+    Does triggering the circuit breaker (manual or automated) reliably halt
+    side-effecting tool calls within the defined SLO?
+  test_procedure: |
+    In a non-production environment with the same gateway config:
+    1. Trigger the break-glass stop for a test agent.
+    2. Attempt a tool call from the same agent identity within 10 seconds.
+    Expected: tool call denied. Measure time from trigger to effective denial.
+    Target: < 5 seconds.
+  pass_criteria: "Breaker containment: >= 99% of post-trigger tool calls denied within 5s"
+  evidence_required:
+    - break_glass_test_result
+    - containment_timing_metric
+    - breaker_trigger_event_log
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 08 — Resource budgets enforced, not just observed
+# Control: C07
+# Tiers: sandbox, bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_08:
+  id: Check08
+  title: Resource budgets enforced, not just observed
+  control: C07
+  tiers: [sandbox, bounded, high_privilege]
+  question: >
+    When an agent exhausts its tool call budget or cost limit, does the gateway
+    deny further side-effecting calls rather than merely logging a warning?
+  test_procedure: |
+    In a test environment:
+    1. Set an agent's tool_calls_remaining budget to 0.
+    2. Attempt a tool call.
+    Expected: denied with reason_code BUDGET_EXCEEDED.
+    Confirm: no tool execution occurred (check tool backend logs).
+  pass_criteria: "Budget-exhausted agent cannot execute side-effecting tools"
+  evidence_required:
+    - budget_enforcement_test_result
+    - confirm_no_tool_execution_on_budget_deny
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 09 — High-impact actions require non-repudiation
+# Control: C12
+# Tiers: high_privilege (conditional on bounded)
+# ─────────────────────────────────────────────────────────
+check_09:
+  id: Check09
+  title: High-impact actions require non-repudiation
+  control: C12
+  tiers: [high_privilege]
+  question: >
+    For financial, irreversible_write, and infrastructure tool calls, does every
+    action carry a valid digital signature linked to the agent's workload identity?
+  test_procedure: |
+    1. Query signed_action_proofs for the last 30 days filtered to
+       tool_category IN ('financial', 'irreversible_write', 'infrastructure').
+    2. Verify signatures are valid against the agent's workload identity key.
+    3. Confirm signature coverage = 100% for required categories.
+  pass_criteria: "100% signature coverage for high-impact tool categories"
+  evidence_required:
+    - signature_coverage_metric (target: 100%)
+    - signature_verification_sample_results
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 10 — Memory access authorized at retrieval time
+# Control: C01, C09
+# Tiers: bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_10:
+  id: Check10
+  title: Memory access authorized at retrieval time
+  control: C01
+  tiers: [bounded, high_privilege]
+  question: >
+    Does the Memory Gateway enforce ACLs at query time (not just at ingest)?
+    Can Agent A retrieve documents from Agent B's memory partition?
+  test_procedure: |
+    1. Configure two agents with separate memory partitions.
+    2. Ingest a document into Agent B's partition.
+    3. Attempt to retrieve it using Agent A's identity.
+    Expected: denied — cross-tenant memory read violation logged.
+  pass_criteria: "Cross-tenant memory read violations: 0 in production"
+  evidence_required:
+    - cross_tenant_test_result (denied)
+    - retrieval_time_acl_enforcement_logs
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 11 — Poisoning detection and quarantine path exists
+# Control: C08, C09
+# Tiers: bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_11:
+  id: Check11
+  title: Poisoning detection and quarantine path exists
+  control: C08
+  tiers: [bounded, high_privilege]
+  question: >
+    Does the Memory Gateway have a poisoning detection mechanism? When a
+    poisoned document is detected, is it quarantined and logged?
+  test_procedure: |
+    1. Inject a test document containing known injection patterns into the
+       memory store ingest path.
+    2. Verify poisoning detection fires.
+    3. Verify the document is quarantined (not returned in subsequent retrievals).
+    4. Check memory.quarantine events in your evidence store.
+  pass_criteria: "Poisoned test document quarantined and not retrievable"
+  evidence_required:
+    - poisoning_detection_test_result
+    - quarantine_event_log
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 12 — Semantic observability correlates to evidence
+# Control: C13
+# Tiers: sandbox, bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_12:
+  id: Check12
+  title: Semantic observability correlates to evidence
+  control: C13
+  tiers: [sandbox, bounded, high_privilege]
+  question: >
+    Given a run_id, can you traverse: semantic_event → ledger_event_id →
+    policy_decision_id → tool_request_hash → replay_trace_step?
+  test_procedure: |
+    1. Pick a recent run_id with at least one tool call.
+    2. Retrieve semantic traces for that run_id.
+    3. Follow audit_ref to ledger_event.
+    4. Follow policy_decision_id to policy decision record.
+    5. Confirm request_hash matches tool request envelope.
+    6. Confirm replay_trace_step_id exists in the replay trace.
+    All five links must resolve.
+  pass_criteria: "Complete correlation chain traversable for sampled runs"
+  evidence_required:
+    - correlation_traversal_result (all 5 links resolved)
+    - sample_run_id used for test
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 13 — Policy bundle versioning and hash pinning
+# Control: C03
+# Tiers: bounded, high_privilege
+# ─────────────────────────────────────────────────────────
+check_13:
+  id: Check13
+  title: Policy bundle versioning and hash pinning
+  control: C03
+  tiers: [bounded, high_privilege]
+  question: >
+    Is every policy bundle versioned, signed, and hash-pinned in the ABOM?
+    Does the gateway verify the bundle hash on each run and emit it in evidence?
+  test_procedure: |
+    1. Retrieve the policy_bundle_hash from a recent policy decision record.
+    2. Verify it matches the hash of the policy bundle file currently deployed.
+    3. Attempt to deploy an unsigned policy bundle.
+    Expected: admission control rejects unsigned bundle.
+  pass_criteria: |
+    policy_bundle_hash in evidence matches deployed bundle.
+    Unsigned bundle deployment rejected.
+  evidence_required:
+    - hash_match_verification_result
+    - unsigned_bundle_rejection_test
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 14 — HITL approvals signed and enforced
+# Control: C09
+# Tiers: high_privilege
+# ─────────────────────────────────────────────────────────
+check_14:
+  id: Check14
+  title: HITL approvals signed and enforced
+  control: C09
+  tiers: [high_privilege]
+  question: >
+    For tool calls requiring HITL, is the approval signed, linked to the
+    request_hash and policy_decision_id, and committed to the ledger?
+    Can a tool call requiring HITL proceed without approval?
+  test_procedure: |
+    1. Configure a tool call that triggers hitl_approval obligation.
+    2. Attempt to execute without providing approval_id.
+    Expected: denied.
+    3. Provide a valid signed approval_id.
+    Expected: allowed (if all other conditions met).
+    4. Verify HITL decision record is in the ledger with valid signature.
+  pass_criteria: |
+    HITL-required tool calls cannot proceed without signed approval.
+    HITL decision record in ledger with signature verified.
+  evidence_required:
+    - hitl_enforcement_test_result
+    - signed_hitl_decision_record_sample
+  status: PENDING
+  notes: ""
+
+# ─────────────────────────────────────────────────────────
+# CHECK 15 — Multi-agent messages signed, versioned, nonce-protected
+# Control: C14
+# Tiers: bounded (conditional), high_privilege
+# ─────────────────────────────────────────────────────────
+check_15:
+  id: Check15
+  title: Multi-agent messages signed, versioned, nonce-protected
+  control: C14
+  tiers: [bounded, high_privilege]
+  conditional_on: multi_agent_workflows
+  question: >
+    Are all agent-to-agent messages sent using the GATE multi-agent envelope?
+    Are replayed nonces rejected? Are spoofed sender signatures rejected?
+  test_procedure: |
+    1. Send a valid AgentMessageEnvelope and verify it is accepted.
+    2. Replay the same envelope (same nonce) — expected: rejected.
+    3. Send an envelope with an invalid signature — expected: rejected.
+    4. Send an envelope with an expired expires_at — expected: rejected.
+  pass_criteria: "All four test cases produce expected accept/reject behavior"
+  evidence_required:
+    - multi_agent_envelope_test_results (4 cases)
+    - nonce_replay_rejection_log
+  status: PENDING
+  notes: ""
