@@ -51,8 +51,12 @@ gate-conformance/
 | Tier | Required checks |
 |---|---|
 | `sandbox` | Check04, Check08, Check12 |
-| `bounded` | All sandbox + Check01–03, Check05–08, Check10–13 |
+| `bounded` | All sandbox + Check01-03, Check05-08, Check10-13, Check16-19 |
 | `high_privilege` | All bounded + Check09, Check14, Check15 |
+
+Check16-19 (the v1.3 controls) apply at `bounded` and `high_privilege`.
+Check17 and Check18 branch on tier inside the check - see
+`runner/README.md` for the per-tier behaviour notes.
 
 ### Step 2 - Work through self_assessment.yaml
 
@@ -93,6 +97,10 @@ query - zero rows means zero tool calls without a policy decision record.
 | Check13 | C03 | Policy bundle hash in evidence matches deployed bundle |
 | Check14 | C09 | HITL-required tool calls blocked without signed approval |
 | Check15 | C14 | Multi-agent messages: signature + nonce + expiry enforced |
+| Check16 | C17 | Unenrolled workloads are detected and remediated within TTL |
+| Check17 | C18 | Memory retrievals pass quality gates before reaching the model |
+| Check18 | C19 | Model behaviour is baselined and monitored for drift at cadence |
+| Check19 | C19/C16 | Drift and adversarial events are emitted as distinct ledger event types |
 
 ---
 
@@ -109,6 +117,10 @@ query - zero rows means zero tool calls without a policy decision record.
 | High-impact signature coverage | 100% |
 | HITL-required without approval | 0 |
 | Cross-tenant memory violations | 0 |
+| Unenrolled workload identities outside remediation TTL (C17) | 0 |
+| Memory retrievals without a quality_decision_id at bounded+ (C18) | 0 |
+| Days without a drift_decision event at bounded+ (C19) | 0 |
+| Drift / adversarial event-type crossover events (C19/C16) | 0 |
 
 ---
 
@@ -124,6 +136,9 @@ query - zero rows means zero tool calls without a policy decision record.
 | RB-04 HITL outage | HITL service unavailable; approver unavailability |
 | RB-05 Invariant bundle update | New high-impact tool; financial limit adjustment |
 | RB-06 Agent decommission | Agent purpose complete; version replacement; retirement |
+| RB-07 C17 candidate backlog escalation | Discovered-but-unenrolled candidates exceed threshold or TTL expires |
+| RB-08 C18 quality gate outage | Memory quality gate service unavailable or failing open |
+| RB-09 C19 drift response | Drift threshold breach requires tier reduction or escalation |
 
 Each runbook includes: trigger, severity, SLO, step-by-step actions,
 evidence capture requirements, and exit criteria.
@@ -132,16 +147,32 @@ evidence capture requirements, and exit criteria.
 
 ## Automated conformance runner
 
-The CLI conformance runner is in development and will be released with
-GATE v1.3. Until then, `self_assessment.yaml` is the normative manual
-verification baseline. Implementations assessed against this release will
-be considered conformant with GATE v1.2.8 under the versioning policy.
+The CLI conformance runner ships in this release (v1.2.0). Run all 19
+checks against your evidence store with:
+
+```bash
+python -m runner.cli run --config gate-conformance.yaml
+```
+
+The runner automates 9 of the 19 checks (Check01, 03, 04, 05, 08, 09,
+10, 12, 13) and returns PARTIAL with structured `manual_steps` for the
+other 10. PARTIAL is not failure - the report carries the specific
+artefact each PARTIAL check still needs from the operator.
+
+See `runner/README.md` for the full quickstart, per-tier behaviour
+notes on Check16-18, exit codes, and how to add a custom check or
+evidence-store backend.
+
+`self_assessment.yaml` remains the normative manual baseline. The
+runner and the self-assessment are designed to be used together:
+runner output for the automatable subset, self-assessment for the
+rest.
 
 ---
 
 ## v1.1.0 (2026-06-16)
 
-Compatible with GATE v1.3. Adds Check16-Check19 (C17 / C18 / C19), seven new evidence correlation queries, and three new runbooks (RB-07 C17 candidate backlog, RB-08 C18 quality gate outage, RB-09 C19 drift response). The conformance runner is in development and ships with v1.3.
+Compatible with GATE v1.3. Adds Check16-Check19 (C17 / C18 / C19), seven new evidence correlation queries, and three new runbooks (RB-07 C17 candidate backlog, RB-08 C18 quality gate outage, RB-09 C19 drift response).
 
 ---
 

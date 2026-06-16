@@ -2,7 +2,7 @@
 # Version: 1.1 - compatible with GATE v1.3
 #
 # Use this document as your manual verification baseline until the
-# automated conformance runner is released. The runner ships with v1.3.
+# automated conformance runner is in use. The runner ships in gate-conformance v1.2.0.
 #
 # How to use:
 #   1. Work through each check for your declared autonomy tier.
@@ -11,16 +11,16 @@
 #   4. Review failing checks and open remediation items.
 #
 # Tiers:
-#   sandbox    — lowest risk; reduced evidence requirements
-#   bounded    — default enterprise production (must pass all bounded checks)
-#   high_privilege — regulated/high-consequence (must pass all checks)
+#   sandbox     -  lowest risk; reduced evidence requirements
+#   bounded     -  default enterprise production (must pass all bounded checks)
+#   high_privilege  -  regulated/high-consequence (must pass all checks)
 #
 # Status values: PASS | FAIL | NOT_APPLICABLE | PENDING
 
 ---
 
 # ─────────────────────────────────────────────────────────
-# CHECK 01 — No tool execution without policy decision record
+# CHECK 01  -  No tool execution without policy decision record
 # Control: C05
 # Tiers: bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -48,7 +48,7 @@ check_01:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 02 — No bypass paths to tools
+# CHECK 02  -  No bypass paths to tools
 # Control: C05
 # Tiers: bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ check_02:
   test_procedure: |
     1. Network: Verify agent runtime pods/containers have no egress route to tool
        backend endpoints (ERP, CRM, external APIs) except via gateway CIDR.
-       Test: attempt curl from agent runtime to tool backend — expect timeout/deny.
+       Test: attempt curl from agent runtime to tool backend  -  expect timeout/deny.
     2. IAM: Verify agent workload identity has no direct IAM permissions on tool
        backends. Run: list IAM bindings for agent service account.
        Expected: no bindings on tool backend resources.
@@ -79,7 +79,7 @@ check_02:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 03 — Verified workload identity on every privileged request
+# CHECK 03  -  Verified workload identity on every privileged request
 # Control: C01
 # Tiers: bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ check_03:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 04 — Schema validation for tool inputs
+# CHECK 04  -  Schema validation for tool inputs
 # Control: C05
 # Tiers: sandbox, bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -136,7 +136,7 @@ check_04:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 05 — Immutable, tamper-evident audit ledger
+# CHECK 05  -  Immutable, tamper-evident audit ledger
 # Control: C11
 # Tiers: bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -150,7 +150,7 @@ check_05:
     does the integrity verifier report PASS?
   test_procedure: |
     1. Run ledger integrity verification:
-       Expected output: PASS — all hash chain links valid, no gaps in sequence_numbers.
+       Expected output: PASS  -  all hash chain links valid, no gaps in sequence_numbers.
     2. Attempt to modify a ledger event (in a test environment):
        Expected: integrity verifier reports FAIL and identifies the tampered event.
     3. Confirm WORM retention policy is active on the cold store bucket.
@@ -166,7 +166,7 @@ check_05:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 06 — Deterministic replay reproduces an incident run
+# CHECK 06  -  Deterministic replay reproduces an incident run
 # Control: C10
 # Tiers: bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -185,7 +185,7 @@ check_06:
          gate-replay --trace <trace_id> --mode mock_all
     4. Compare output: request_hash and response_hash for each tool step
        must match the original trace.
-    Expected: PASS — all step hashes match.
+    Expected: PASS  -  all step hashes match.
   pass_criteria: "Replay success rate >= 95% across sampled runs"
   evidence_required:
     - replay_report_showing_hash_match
@@ -194,7 +194,7 @@ check_06:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 07 — Circuit breakers stop side effects
+# CHECK 07  -  Circuit breakers stop side effects
 # Control: C06
 # Tiers: bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -221,7 +221,7 @@ check_07:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 08 — Resource budgets enforced, not just observed
+# CHECK 08  -  Resource budgets enforced, not just observed
 # Control: C07
 # Tiers: sandbox, bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ check_08:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 09 — High-impact actions require non-repudiation
+# CHECK 09  -  High-impact actions require non-repudiation
 # Control: C12
 # Tiers: high_privilege (conditional on bounded)
 # ─────────────────────────────────────────────────────────
@@ -272,7 +272,7 @@ check_09:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 10 — Memory access authorized at retrieval time
+# CHECK 10  -  Memory access authorized at retrieval time
 # Control: C01, C09
 # Tiers: bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -288,7 +288,7 @@ check_10:
     1. Configure two agents with separate memory partitions.
     2. Ingest a document into Agent B's partition.
     3. Attempt to retrieve it using Agent A's identity.
-    Expected: denied — cross-tenant memory read violation logged.
+    Expected: denied  -  cross-tenant memory read violation logged.
   pass_criteria: "Cross-tenant memory read violations: 0 in production"
   evidence_required:
     - cross_tenant_test_result (denied)
@@ -297,7 +297,7 @@ check_10:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 11 — Poisoning detection and quarantine path exists
+# CHECK 11  -  Poisoning detection and quarantine path exists
 # Control: C08, C09
 # Tiers: bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -323,7 +323,7 @@ check_11:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 12 — Semantic observability correlates to evidence
+# CHECK 12  -  Semantic observability correlates to evidence
 # Control: C13
 # Tiers: sandbox, bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -351,7 +351,7 @@ check_12:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 13 — Policy bundle versioning and hash pinning
+# CHECK 13  -  Policy bundle versioning and hash pinning
 # Control: C03
 # Tiers: bounded, high_privilege
 # ─────────────────────────────────────────────────────────
@@ -378,7 +378,7 @@ check_13:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 14 — HITL approvals signed and enforced
+# CHECK 14  -  HITL approvals signed and enforced
 # Control: C09
 # Tiers: high_privilege
 # ─────────────────────────────────────────────────────────
@@ -408,7 +408,7 @@ check_14:
   notes: ""
 
 # ─────────────────────────────────────────────────────────
-# CHECK 15 — Multi-agent messages signed, versioned, nonce-protected
+# CHECK 15  -  Multi-agent messages signed, versioned, nonce-protected
 # Control: C14
 # Tiers: bounded (conditional), high_privilege
 # ─────────────────────────────────────────────────────────
@@ -423,9 +423,9 @@ check_15:
     Are replayed nonces rejected? Are spoofed sender signatures rejected?
   test_procedure: |
     1. Send a valid AgentMessageEnvelope and verify it is accepted.
-    2. Replay the same envelope (same nonce) — expected: rejected.
-    3. Send an envelope with an invalid signature — expected: rejected.
-    4. Send an envelope with an expired expires_at — expected: rejected.
+    2. Replay the same envelope (same nonce)  -  expected: rejected.
+    3. Send an envelope with an invalid signature  -  expected: rejected.
+    4. Send an envelope with an expired expires_at  -  expected: rejected.
   pass_criteria: "All four test cases produce expected accept/reject behavior"
   evidence_required:
     - multi_agent_envelope_test_results (4 cases)
@@ -438,11 +438,11 @@ check_15:
 # (Conformance and Verification section). Do not paraphrase.
 
 # Bump the header preamble in self_assessment.yaml when applying these:
-#   - Version: 1.1 — compatible with GATE v1.3
-#   - "automated conformance runner is released (GATE v1.3)" remains (runner ships with v1.3)
+#   - Version: 1.1  -  compatible with GATE v1.3
+#   - "automated conformance runner is in use (GATE v1.3)" remains (runner ships with v1.3)
 
 # ---------------------------------------------------------
-# CHECK 16 — Unenrolled workloads are detected and remediated
+# CHECK 16  -  Unenrolled workloads are detected and remediated
 # Control: C17 (also touches C04)
 # Tiers: bounded (enforce), high_privilege (enforce); sandbox observe-only acceptable
 # ---------------------------------------------------------
@@ -485,7 +485,7 @@ check_16:
     run in enforce mode with the termination path validated end-to-end.
 
 # ---------------------------------------------------------
-# CHECK 17 — Memory retrievals pass quality gates before reaching the model
+# CHECK 17  -  Memory retrievals pass quality gates before reaching the model
 # Control: C18
 # Tiers: bounded, high_privilege
 # ---------------------------------------------------------
@@ -526,7 +526,7 @@ check_17:
   notes: ""
 
 # ---------------------------------------------------------
-# CHECK 18 — Model behaviour is baselined and monitored for drift
+# CHECK 18  -  Model behaviour is baselined and monitored for drift
 # Control: C19 (depends on C13)
 # Tiers: bounded, high_privilege
 # ---------------------------------------------------------
@@ -573,7 +573,7 @@ check_18:
     population level.
 
 # ---------------------------------------------------------
-# CHECK 19 — Adversarial and drift events are emitted as distinct types
+# CHECK 19  -  Adversarial and drift events are emitted as distinct types
 # Controls: C19 + C16
 # Tiers: bounded, high_privilege
 # ---------------------------------------------------------

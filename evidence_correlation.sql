@@ -4,18 +4,18 @@
 --          and conformance verification.
 --
 -- Table naming convention assumed:
---   gate_policy_decisions       — policy decision records
---   gate_tool_requests          — tool request envelopes
---   gate_tool_responses         — tool response envelopes
---   gate_ledger_events          — audit ledger events
---   gate_replay_traces          — replay trace summaries
---   gate_replay_steps           — individual replay trace steps
---   gate_semantic_traces        — semantic observability events
---   gate_hitl_decisions         — HITL decision records
---   gate_breaker_events         — circuit breaker trigger events
---   gate_budget_events          — budget/quota enforcement events
---   gate_memory_decisions       — memory gateway ACL decisions
---   gate_memory_quarantine      — memory poisoning quarantine events
+--   gate_policy_decisions        -  policy decision records
+--   gate_tool_requests           -  tool request envelopes
+--   gate_tool_responses          -  tool response envelopes
+--   gate_ledger_events           -  audit ledger events
+--   gate_replay_traces           -  replay trace summaries
+--   gate_replay_steps            -  individual replay trace steps
+--   gate_semantic_traces         -  semantic observability events
+--   gate_hitl_decisions          -  HITL decision records
+--   gate_breaker_events          -  circuit breaker trigger events
+--   gate_budget_events           -  budget/quota enforcement events
+--   gate_memory_decisions        -  memory gateway ACL decisions
+--   gate_memory_quarantine       -  memory poisoning quarantine events
 --
 -- Adapt table names and schema to your actual evidence store schema.
 

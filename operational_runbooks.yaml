@@ -1,17 +1,17 @@
-# GATE Day-2 Operational Runbooks — Minimum Set
-# Version: 1.0 — compatible with GATE v1.2.8
+# GATE Day-2 Operational Runbooks  -  Minimum Set
+# Version: 1.0  -  compatible with GATE v1.2.8
 #
 # These runbooks are normative starting points. Adapt them to your
 # incident management tooling, on-call rotation, and escalation paths.
 #
 # Each runbook follows the structure:
-#   Trigger       — what causes this runbook to be invoked
-#   Severity      — P1/P2/P3 classification
-#   Owner         — who is responsible for execution
-#   Steps         — ordered, actionable steps
-#   Evidence      — what must be captured
-#   Exit criteria — how you know the runbook is complete
-#   Escalation    — who to call if stuck
+#   Trigger        -  what causes this runbook to be invoked
+#   Severity       -  P1/P2/P3 classification
+#   Owner          -  who is responsible for execution
+#   Steps          -  ordered, actionable steps
+#   Evidence       -  what must be captured
+#   Exit criteria  -  how you know the runbook is complete
+#   Escalation     -  who to call if stuck
 
 ---
 
@@ -40,18 +40,18 @@ runbook_01:
     - step: 1
       action: Activate break-glass stop at the Tool Gateway
       detail: |
-        Option A — Global stop (all agents in environment):
+        Option A  -  Global stop (all agents in environment):
           gate-control stop --env prod --scope all --reason "incident-<TICKET_ID>"
 
-        Option B — Agent-specific stop:
+        Option B  -  Agent-specific stop:
           gate-control stop --env prod --agent-id <agent_instance_id> --reason "incident-<TICKET_ID>"
 
-        Option C — If CLI unavailable, use cloud console:
+        Option C  -  If CLI unavailable, use cloud console:
           AWS:   Revoke the gateway IAM role's tool backend access via SCP
           Azure: Disable the gateway Managed Identity in Azure AD
           GCP:   Remove gateway service account IAM bindings on tool backends
 
-        Confirm: Attempt a test tool call — it must return denied.
+        Confirm: Attempt a test tool call  -  it must return denied.
         Measure: Record time from command to confirmed denial (target: < 5s)
       evidence_capture:
         - stop_activation_command and timestamp
@@ -69,7 +69,7 @@ runbook_01:
           Azure: Pause Logic App or AKS job scheduler
           GCP:   Pause Cloud Tasks queue or GKE CronJob
 
-        Do not drain the queue — preserve the pending work items as evidence.
+        Do not drain the queue  -  preserve the pending work items as evidence.
       evidence_capture:
         - orchestrator_pause_confirmation
         - list of paused run_ids
@@ -78,7 +78,7 @@ runbook_01:
       action: Snapshot evidence before any state changes
       detail: |
         Capture evidence pointers for all affected runs BEFORE revoking
-        identities or rotating credentials. Order matters — revocation
+        identities or rotating credentials. Order matters  -  revocation
         may affect your ability to query some evidence stores.
 
         For each affected run_id:
@@ -98,7 +98,7 @@ runbook_01:
       action: Revoke affected workload identities
       detail: |
         Revoke the identity of the compromised or misbehaving agent instance.
-        This is the primary containment mechanism — revocation must propagate
+        This is the primary containment mechanism  -  revocation must propagate
         to all gateways within the token TTL (typically 15 minutes max).
 
           gate-identity revoke --subject <agent_instance_id> --env prod
@@ -170,7 +170,7 @@ runbook_02:
     - Policy change causes unexpected allows (safety regression)
     - Policy bundle integrity check fails
     - Conformance check failure after policy update
-  severity: P2 (P1 if safety regression — unexpected allows)
+  severity: P2 (P1 if safety regression  -  unexpected allows)
   owner: Platform Engineering + Security Engineering
 
   steps:
@@ -356,7 +356,7 @@ runbook_03:
 
         If replay status is PASS but the incident still occurred, the issue
         is in the control plane enforcement (obligation ignored, bypass path,
-        signing failure) — not in the model's reasoning.
+        signing failure)  -  not in the model's reasoning.
 
         If replay status is FAIL (hash mismatch), investigate:
         - Did canonicalization differ between components? (hash drift, C09 failure mode)
@@ -407,7 +407,7 @@ runbook_04:
     GATE's fail-closed principle applies: if the HITL service is unavailable
     and a tool call requires HITL, the tool call MUST be denied.
     The gateway must NOT proceed in "degraded" mode without approval.
-    This is not a bug — it is the correct safe behavior.
+    This is not a bug  -  it is the correct safe behavior.
 
   steps:
 
@@ -433,17 +433,17 @@ runbook_04:
         During HITL service outage, agents requiring HITL will be denied.
         This is correct behavior. Options depending on business impact:
 
-        Option A — Wait for HITL service recovery (preferred for high-impact tools)
+        Option A  -  Wait for HITL service recovery (preferred for high-impact tools)
           No action needed. Agents will retry when the service recovers.
           Monitor queue depth in the orchestrator.
 
-        Option B — Temporarily lower the HITL obligation threshold (if safe)
+        Option B  -  Temporarily lower the HITL obligation threshold (if safe)
           Only applicable if the blocked tools are low-risk and the HITL
           requirement is driven by ORM score, not tool category.
           Requires: policy bundle update + change approval + CISO sign-off.
           Do NOT do this for financial or irreversible_write tools.
 
-        Option C — Escalate to manual processing outside the agent system
+        Option C  -  Escalate to manual processing outside the agent system
           For time-critical financial operations: route to human operators
           via your existing manual payment/approval process.
           Document all manual actions in the incident ticket.
@@ -477,7 +477,7 @@ runbook_04:
             AND time BETWEEN '<outage_start>' AND '<outage_end>';
 
         For each denied action:
-        - If the work is still needed: re-trigger the agent run — it will
+        - If the work is still needed: re-trigger the agent run  -  it will
           request HITL approval through the restored service
         - If the work was handled manually: document the manual action
           in the incident ticket and link to the original deny record
@@ -639,7 +639,7 @@ runbook_06:
     - step: 2
       action: Quiesce the agent
       detail: |
-        Set the agent to quiesce mode — side-effecting tool calls are denied
+        Set the agent to quiesce mode  -  side-effecting tool calls are denied
         but observability and evidence emission continue:
           gate-control quiesce --agent <agent_name> --env prod
 
