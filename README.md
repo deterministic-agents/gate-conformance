@@ -1,14 +1,28 @@
 # gate-conformance
 
-**GATE conformance checks, self-assessment, and operational runbooks - v1.1.0**
+**GATE conformance checks, self-assessment, operational runbooks, and conformance runner - v1.2.0**
 
 19 conformance checks with test procedures and evidence requirements,
 a fillable conformance report template, BigQuery evidence correlation
-queries, and 9 operational runbooks for Day-2 operations.
+queries, 9 operational runbooks for Day-2 operations, and a runner
+that automates 9 of the 19 checks against your evidence store.
 
 Framework: https://deterministicagents.ai  
 Organisation: https://github.com/deterministic-agents  
 Documentation: CC BY 4.0 - Andrew Stevens · Code: MIT
+
+---
+
+## v1.2.0 (2026-06-16)
+
+Adds the conformance runner: `python -m runner.cli run --config gate-conformance.yaml`.
+Automates 9 of the 19 checks against your evidence store (Check01, 03,
+04, 05, 08, 09, 10, 12, 13) and returns PARTIAL with structured
+`manual_steps` for the other 10. Supports sqlite (built in) and
+BigQuery (optional dependency). Runner output matches the v1.1
+conformance report template shape. See `runner/README.md` for the full
+quickstart and the per-tier behaviour notes on Check16, Check17, and
+Check18.
 
 ---
 
@@ -19,7 +33,13 @@ gate-conformance/
 ├── self_assessment.yaml              # 19 checks with test procedures
 ├── conformance_report_template.yaml  # Fillable report for audit submission
 ├── evidence_correlation.sql          # BigQuery queries for evidence chain traversal
-└── operational_runbooks.yaml         # 9 Day-2 runbooks
+├── operational_runbooks.yaml         # 9 Day-2 runbooks
+├── runner/                           # Conformance runner CLI (v1.2.0)
+│   ├── cli.py, config.py, report.py
+│   ├── adapters/  (sqlite, BigQuery)
+│   ├── checks/    (Check01..Check19)
+│   └── README.md  (quickstart, tier behaviour, extension guide)
+└── tests/runner/                     # 68 pytest cases against sqlite fixtures
 ```
 
 ---

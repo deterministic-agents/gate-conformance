@@ -1,0 +1,57 @@
+# gate-conformance runner - example configuration
+#
+# Save as gate-conformance.yaml in your evidence pipeline repo and
+# run: gate-conformance run --config gate-conformance.yaml
+
+# ----------------------------------------------------------------------
+# evidence_store
+# ----------------------------------------------------------------------
+# Pick one backend. Add more in runner/adapters/.
+#
+# sqlite (used by the runner's own tests and small deployments):
+#   type: sqlite
+#   path: /var/lib/gate/evidence.db
+#
+# bigquery (production):
+evidence_store:
+  type: bigquery
+  project: my-gcp-project
+  dataset: gate_evidence
+  location: EU                  # optional
+
+# ----------------------------------------------------------------------
+# Identity of the run
+# ----------------------------------------------------------------------
+tenant_id: acme-corp
+environment: prod              # dev | test | prod
+autonomy_tier: bounded         # sandbox | bounded | high_privilege
+
+# How many days of evidence to consider in the assessment.
+assessment_window_days: 30
+
+# ----------------------------------------------------------------------
+# Thresholds - override the runner's defaults if your SLOs are tighter.
+# ----------------------------------------------------------------------
+thresholds:
+  # v1.0
+  min_replay_success_rate_pct: 95
+  max_hitl_review_hours: 24
+  max_breaker_containment_seconds: 30
+  min_attestation_coverage_pct: 100
+  min_signature_coverage_pct: 100
+
+  # v1.3
+  c17_remediation_ttl_hours: 72
+  c17_classifier_coverage_pct: 100
+  c18_quality_decision_coverage_pct: 100
+  c19_drift_decision_cadence_hours: 24
+  c19_baseline_max_age_days: 90
+
+# ----------------------------------------------------------------------
+# Logical table names - override if your evidence store uses different
+# names than the GATE reference schema.
+# ----------------------------------------------------------------------
+table_name_overrides: {}
+  # gate_policy_decisions: my_policy_decisions
+  # gate_tool_requests:    my_tool_requests
+  # gate_memory_responses: my_memory_responses
