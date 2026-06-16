@@ -258,3 +258,218 @@ HAVING
   OR total_tool_calls > 100     -- flag high-volume runs
   OR high_impact_calls > 5      -- flag runs with many high-impact calls
 ORDER BY total_cost_usd DESC;
+-- GATE Evidence Correlation Queries - v1.1.0 additions
+-- Append these queries to evidence_correlation.sql for GATE v1.3.
+-- Table naming convention follows the existing v1.0.0 set:
+--   gate_discovery_events           (gate.discovery.agent_discovered)
+--   gate_remediation_outcomes       (gate.discovery.agent_remediation_outcome)
+--   gate_c04_inventory              (current C04 lifecycle records)
+--   gate_memory_responses           (memory response envelopes incl. quality_decision_id)
+--   gate_quality_decisions          (gate.memory.quality_decision)
+--   gate_quality_bundles            (signed quality bundle versions)
+--   gate_baselines                  (signed behavioural baselines)
+--   gate_drift_decisions            (gate.assurance.drift_decision)
+--   gate_response_actions           (gate.assurance.response_action)
+--   gate_adversarial_outcomes       (gate.assurance.adversarial_outcome - C16)
+--   gate_abom                       (ABOM records)
+--   gate_agent_state                (C04 lifecycle states incl. Discovered)
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHECK 16 - Query 1: Unenrolled identity reconciliation
+-- Identities present in the tool API stream but not in the C04 inventory,
+-- outside the active remediation TTL window. Target: 0 rows.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+WITH active_exceptions AS (
+  SELECT
+    candidate_hash,
+    workload_identity,
+    exception_ttl_expires_at
+  FROM gate_remediation_outcomes
+  WHERE outcome = 'exception'
+    AND exception_ttl_expires_at > CURRENT_TIMESTAMP()
+),
+recent_tool_callers AS (
+  SELECT DISTINCT agent_instance_id AS workload_identity
+  FROM gate_tool_requests
+  WHERE environment = 'prod'
+    AND time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+)
+SELECT
+  rtc.workload_identity,
+  'unenrolled - no C04 record and no active exception' AS finding
+FROM recent_tool_callers rtc
+LEFT JOIN gate_c04_inventory c04
+  ON rtc.workload_identity = c04.agent_instance_id
+LEFT JOIN active_exceptions ax
+  ON rtc.workload_identity = ax.workload_identity
+WHERE c04.agent_instance_id IS NULL
+  AND ax.workload_identity IS NULL;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHECK 16 - Query 2: Classifier coverage per observation window
+-- Percentage of governed workload identities scanned by the C17 classifier
+-- per 24-hour observation window. Target: 100%.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+WITH governed_identities AS (
+  SELECT DISTINCT agent_instance_id AS workload_identity
+  FROM gate_tool_requests
+  WHERE environment = 'prod'
+    AND time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+),
+scanned_identities AS (
+  SELECT DISTINCT JSON_EXTRACT_SCALAR(candidate_payload, '$.workload_identity') AS workload_identity
+  FROM gate_discovery_events
+  WHERE environment = 'prod'
+    AND time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+)
+SELECT
+  COUNT(DISTINCT g.workload_identity) AS total_governed,
+  COUNT(DISTINCT s.workload_identity) AS scanned,
+  SAFE_DIVIDE(COUNT(DISTINCT s.workload_identity) * 100.0,
+              COUNT(DISTINCT g.workload_identity)) AS coverage_pct
+FROM governed_identities g
+LEFT JOIN scanned_identities s
+  ON g.workload_identity = s.workload_identity;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHECK 17 - Query 3: Quality decision coverage
+-- Count of memory retrievals returned with and without a quality_decision_id.
+-- Target: zero without.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+SELECT
+  COUNT(*) AS total_retrievals,
+  COUNT(quality_decision_id) AS retrievals_with_quality_decision,
+  COUNT(*) - COUNT(quality_decision_id) AS retrievals_without_quality_decision,
+  SAFE_DIVIDE(COUNT(quality_decision_id) * 100.0, COUNT(*)) AS coverage_pct
+FROM gate_memory_responses
+WHERE environment = 'prod'
+  AND request_type = 'read'
+  AND time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY);
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHECK 17 - Query 4: Quality bundle version consistency
+-- Verify the quality_bundle_hash recorded in every quality_decision event
+-- matches a known, signed bundle version.
+-- Target: zero unknown hashes.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+SELECT
+  qd.quality_bundle_hash,
+  COUNT(*) AS decisions_referencing_unknown_bundle
+FROM gate_quality_decisions qd
+LEFT JOIN gate_quality_bundles qb
+  ON qd.quality_bundle_hash = qb.bundle_hash
+WHERE qb.bundle_hash IS NULL
+  AND qd.environment = 'prod'
+  AND qd.time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+GROUP BY qd.quality_bundle_hash;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHECK 18 - Query 5: Baseline currency per agent
+-- Agents at bounded tier or above whose current baseline is missing or
+-- exceeds the configured maximum age. Replace @max_age_days at runtime
+-- (recommend 90).
+-- Target: 0 rows.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+SELECT
+  agent.agent_instance_id,
+  agent.autonomy_tier,
+  CASE
+    WHEN b.created_at IS NULL THEN 'no_baseline'
+    WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), b.created_at, DAY) > @max_age_days
+      THEN 'baseline_stale'
+    ELSE 'ok'
+  END AS finding,
+  TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), b.created_at, DAY) AS baseline_age_days
+FROM gate_agent_state agent
+LEFT JOIN gate_abom a
+  ON agent.agent_instance_id = a.agent_instance_id
+  AND a.is_current = TRUE
+LEFT JOIN gate_baselines b
+  ON a.current_baseline_hash = b.baseline_hash
+WHERE agent.autonomy_tier IN ('bounded', 'high_privilege')
+  AND agent.state = 'Run'
+  AND (
+    b.baseline_hash IS NULL
+    OR TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), b.created_at, DAY) > @max_age_days
+  );
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHECK 18 - Query 6: Drift decision cadence gaps
+-- Gaps between consecutive drift_decision events per (agent, dimension)
+-- exceeding the configured cadence (replace @cadence_hours, recommend 24).
+-- Target: 0 rows.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+WITH ordered AS (
+  SELECT
+    JSON_EXTRACT_SCALAR(payload, '$.agent_instance_id') AS agent_instance_id,
+    dimension,
+    time,
+    LAG(time) OVER (
+      PARTITION BY JSON_EXTRACT_SCALAR(payload, '$.agent_instance_id'), dimension
+      ORDER BY time
+    ) AS previous_time
+  FROM gate_drift_decisions
+  WHERE environment = 'prod'
+    AND time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+)
+SELECT
+  agent_instance_id,
+  dimension,
+  previous_time,
+  time AS current_time,
+  TIMESTAMP_DIFF(time, previous_time, HOUR) AS gap_hours
+FROM ordered
+WHERE previous_time IS NOT NULL
+  AND TIMESTAMP_DIFF(time, previous_time, HOUR) > @cadence_hours;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CHECK 19 - Query 7: Event type distinction (C16 vs C19)
+-- Both ledger event types must be observable within the assessment window
+-- with zero crossover. Returns one row summarising counts.
+-- Target: c19_drift > 0, c16_adversarial > 0, crossover = 0.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+WITH window AS (
+  SELECT TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY) AS window_start
+),
+drift AS (
+  SELECT COUNT(*) AS c19_drift_count
+  FROM gate_drift_decisions
+  WHERE environment = 'prod'
+    AND time >= (SELECT window_start FROM window)
+),
+adversarial AS (
+  SELECT COUNT(*) AS c16_adversarial_count
+  FROM gate_adversarial_outcomes
+  WHERE environment = 'prod'
+    AND time >= (SELECT window_start FROM window)
+),
+crossover AS (
+  -- Any drift_decision event_type appearing in the adversarial table,
+  -- or vice versa. Should be impossible under a correct implementation.
+  SELECT COUNT(*) AS crossover_count
+  FROM gate_adversarial_outcomes
+  WHERE event_type = 'gate.assurance.drift_decision'
+  UNION ALL
+  SELECT COUNT(*) AS crossover_count
+  FROM gate_drift_decisions
+  WHERE event_type = 'gate.assurance.adversarial_outcome'
+)
+SELECT
+  d.c19_drift_count,
+  a.c16_adversarial_count,
+  (SELECT SUM(crossover_count) FROM crossover) AS crossover_count
+FROM drift d, adversarial a;
