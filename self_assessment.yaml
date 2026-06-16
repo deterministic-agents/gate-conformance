@@ -1,8 +1,8 @@
 # GATE Conformance Self-Assessment
-# Version: 1.0 — compatible with GATE v1.2.8
+# Version: 1.1 - compatible with GATE v1.3
 #
 # Use this document as your manual verification baseline until the
-# automated conformance runner is released (GATE v1.3).
+# automated conformance runner is released. The runner ships with v1.3.
 #
 # How to use:
 #   1. Work through each check for your declared autonomy tier.
@@ -432,3 +432,184 @@ check_15:
     - nonce_replay_rejection_log
   status: PENDING
   notes: ""
+# Self-assessment additions for v1.1.0 (GATE v1.3).
+# Append these blocks to self_assessment.yaml after check_15.
+# Requirement and Evidence fields are verbatim from the v1.3 PDF
+# (Conformance and Verification section). Do not paraphrase.
+
+# Bump the header preamble in self_assessment.yaml when applying these:
+#   - Version: 1.1 — compatible with GATE v1.3
+#   - "automated conformance runner is released (GATE v1.3)" remains (runner ships with v1.3)
+
+# ---------------------------------------------------------
+# CHECK 16 — Unenrolled workloads are detected and remediated
+# Control: C17 (also touches C04)
+# Tiers: bounded (enforce), high_privilege (enforce); sandbox observe-only acceptable
+# ---------------------------------------------------------
+check_16:
+  id: Check16
+  title: Unenrolled workloads are detected and remediated
+  control: C17
+  tiers: [bounded, high_privilege]
+  conditional_on: null
+  question: >
+    Does every workload identity making a call to a registered LLM endpoint or
+    to a tool in the GATE Tool Gateway tool registry produce either a C04
+    lifecycle record or a C17 exception record with a non-expired TTL?
+  test_procedure: |
+    Requirement: Every workload identity that makes a call to a registered LLM
+    endpoint or to a tool in the GATE Tool Gateway tool registry produces either
+    a C04 lifecycle record (Discovered, Commissioned, Run, Quiesce,
+    Decommissioned) or a C17 exception record with a non-expired TTL. There is
+    no third state. Discovered candidates have a remediation TTL after which
+    the termination path runs end-to-end (IdP revocation, Tool Gateway deny
+    rule, network egress block).
+  pass_criteria: >
+    Zero workload identities present in the tool API stream that lack either
+    a C04 lifecycle record or a C17 exception record with a non-expired TTL,
+    outside the active remediation TTL window. Termination drill validates
+    end-to-end revocation.
+  evidence_required:
+    - agent.discovered events for the assessment window
+    - agent.remediation_outcome events for the assessment window
+    - reconciliation report comparing the C04 inventory snapshot against the
+      tool API stream identities (delta should be zero outside the active
+      remediation TTL window)
+    - termination drill record showing time-to-revocation, deny-rule version,
+      and network-policy version
+    - signed classifier_bundle_hash matching the hash recorded in each
+      discovery event
+  status: PENDING
+  notes: >
+    Sandbox tier may run in observe-only mode. Bounded and high_privilege MUST
+    run in enforce mode with the termination path validated end-to-end.
+
+# ---------------------------------------------------------
+# CHECK 17 — Memory retrievals pass quality gates before reaching the model
+# Control: C18
+# Tiers: bounded, high_privilege
+# ---------------------------------------------------------
+check_17:
+  id: Check17
+  title: Memory retrievals pass quality gates before reaching the model
+  control: C18
+  tiers: [bounded, high_privilege]
+  conditional_on: null
+  question: >
+    Does every retrieval returned by the Memory Gateway carry a
+    quality_decision_id referencing a gate.memory.quality_decision event,
+    with freshness and confidence gates enforced at bounded tier and the
+    provenance gate additionally enforced at high-privilege tier?
+  test_procedure: |
+    Requirement: Every retrieval returned by the Memory Gateway carries a
+    quality_decision_id referencing a gate.memory.quality_decision event.
+    For Bounded tier, every retrieval is evaluated against freshness and
+    confidence thresholds; for High-Privilege tier, the provenance gate is
+    also enforced. Items with missing or unverifiable provenance metadata
+    are rejected at write time. Quality bundle changes are signed and
+    approved under the same change-control bar as the invariant bundle.
+  pass_criteria: >
+    Zero retrievals returned without a quality_decision_id. Freshness and
+    confidence gates enforce at bounded; provenance gate additionally
+    enforces at high-privilege. Write-time rejections logged for items
+    missing required metadata. Quality bundle changes carry signed approvals.
+  evidence_required:
+    - Sample gate.memory.quality_decision events from the assessment window
+    - Quality bundle showing per-content-class TTL, minimum confidence, and
+      provenance_required flag
+    - Bundle signature verification log
+    - Memory Gateway write rejection log for items lacking required metadata
+    - Agent runtime traces showing that quality_flags returned with
+      retrievals are honoured downstream (not stripped or ignored by the
+      prompt template)
+  status: PENDING
+  notes: ""
+
+# ---------------------------------------------------------
+# CHECK 18 — Model behaviour is baselined and monitored for drift
+# Control: C19 (depends on C13)
+# Tiers: bounded, high_privilege
+# ---------------------------------------------------------
+check_18:
+  id: Check18
+  title: Model behaviour is baselined and monitored for drift
+  control: C19
+  tiers: [bounded, high_privilege]
+  conditional_on: null
+  depends_on: [C13]
+  question: >
+    Does each agent at Bounded tier or above have a signed behavioural
+    baseline tied to its current ABOM version, with drift decisions emitted
+    on cadence and the configured response applied per tier and dimension?
+  test_procedure: |
+    Requirement: Each agent at Bounded tier or above has a signed
+    behavioural baseline tied to its current ABOM version. The drift
+    detector observes the C13 semantic event stream and emits
+    gate.assurance.drift_decision events at the configured cadence. For
+    Bounded tier, log-only response is the minimum acceptable posture; for
+    High-Privilege tier, the response router applies the configured
+    tier-reduction or halt actions for drift dimensions in the high-impact
+    list. Baselines are invalidated and re-captured on ABOM change;
+    re-baselining without an ABOM change requires an exception with
+    approver identity.
+  pass_criteria: >
+    Every agent at bounded or above has an active signed baseline tied to
+    its current ABOM. Drift decisions emitted within the configured
+    cadence. Response action matrix enforced per tier and dimension.
+    Re-baselining log records approver identity and the ABOM transition
+    that triggered each refresh.
+  evidence_required:
+    - Baseline artifact with signature verification
+    - Corpus descriptor recorded in the baseline
+    - Sample drift decision events with baseline_hash, abom_hash,
+      statistical test, test statistic, and p-value
+    - Response action matrix per tier and dimension
+    - Re-baselining log showing approver identity, rationale, and the
+      ABOM version transition that triggered each baseline refresh
+  status: PENDING
+  notes: >
+    C19 depends on C13 coverage. Cannot pass Check18 without first passing
+    Check12 (Semantic Observability Correlates to Evidence) at the agent
+    population level.
+
+# ---------------------------------------------------------
+# CHECK 19 — Adversarial and drift events are emitted as distinct types
+# Controls: C19 + C16
+# Tiers: bounded, high_privilege
+# ---------------------------------------------------------
+check_19:
+  id: Check19
+  title: Adversarial and drift events are emitted as distinct ledger event types
+  control: C19
+  also_covers: [C16]
+  tiers: [bounded, high_privilege]
+  conditional_on: null
+  question: >
+    Are C16 adversarial detections and C19 drift detections emitted as
+    separate ledger event types and governed by separate runbooks?
+  test_procedure: |
+    Requirement: C16 adversarial detections and C19 drift detections are
+    emitted as separate ledger event types
+    (gate.assurance.adversarial_outcome for C16;
+    gate.assurance.drift_decision and gate.assurance.response_action for
+    C19) and are governed by separate runbooks. A C19 drift response
+    runbook does not begin from an assumption of adversarial cause.
+    Conformance evidence for one cannot be substituted for the other.
+  pass_criteria: >
+    Event type registry contains all three event type names. Sample of
+    each event type observable in the assessment window. Drift response
+    runbook and adversarial response runbook stored as separate documents
+    with separate review histories.
+  evidence_required:
+    - Event type registry entry with normative note distinguishing C16 and C19
+    - Sample of each event type from the assessment window
+    - Drift response runbook and adversarial response runbook stored as
+      separate documents
+    - Sign-off log showing the runbooks were reviewed and updated when
+      C19 was introduced
+  status: PENDING
+  notes: >
+    This check exists to enforce architectural separation. Implementations
+    that emit drift_decision under an adversarial_outcome type, or that
+    use a single combined runbook, fail this check regardless of any other
+    evidence.

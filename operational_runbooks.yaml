@@ -695,3 +695,264 @@ runbook_06:
     - Agent removed from policy allowlists and tool auth matrix
     - Agent inventory updated to DECOMMISSIONED status
     - Infrastructure resources cleaned up
+# Operational runbooks - v1.1.0 additions
+# Append these three runbooks (RB-07, RB-08, RB-09) to
+# operational_runbooks.yaml after the last existing entry.
+
+# ═══════════════════════════════════════════════════════════════════
+# RUNBOOK 7: C17 Candidate Backlog Escalation
+# ═══════════════════════════════════════════════════════════════════
+
+runbook_07:
+  id: RB-07
+  title: C17 candidate backlog escalation
+  trigger: |
+    Any of the following:
+    - Discovered-but-unenrolled candidate count exceeds configured threshold
+    - C17 remediation TTL expires without resolution
+    - High-privilege tool access detected from an unenrolled identity
+  severity: P2  # Promoted to P1 if high-privilege tool access detected
+  owner: Platform Engineering on-call + C04 Lifecycle owner
+  slo:
+    time_to_owner_resolution: 72 hours from discovery
+    time_to_termination_after_ttl_expiry: 1 hour
+
+  steps:
+
+    - step: 1
+      action: Identify owner via asset tags
+      detail: |
+        Inspect cloud asset tags, billing tags, and IAM role bindings for the
+        candidate workload identity. Resolve to a team or individual owner.
+        If no owner tag is found and the candidate operates in a high-privilege
+        environment, follow the v1.3 untagged-asset policy (immediate
+        termination by default; relaxed posture allowed for 30 days under
+        documented exception).
+
+    - step: 2
+      action: Open C04 Commission ticket
+      detail: |
+        Route to the owner with the candidate_hash, detection_boundary,
+        classification_confidence, and the agent.discovered event reference.
+        Default remediation TTL is 72 hours; high-privilege candidates that
+        access financial or infrastructure tools default to 24 hours.
+
+    - step: 3
+      action: Track TTL and escalate
+      detail: |
+        Monitor candidate state. At 50% TTL elapsed, raise a P2 alert to the
+        owner. At 75% TTL, escalate to the team manager. At TTL expiry without
+        resolution, proceed to step 4.
+
+    - step: 4
+      action: Activate termination path
+      detail: |
+        Execute the full termination sequence and capture proof at each layer:
+        - IdP: revoke workload identity. Capture idp_revocation_id.
+        - Tool Gateway: inject deny rule for the identity. Capture
+          gateway_deny_rule_version.
+        - Network: block egress via cloud-native network policy. Capture
+          network_policy_version.
+
+    - step: 5
+      action: Emit remediation outcome
+      detail: |
+        Emit gate.discovery.agent_remediation_outcome event with outcome set
+        to either 'enrolled' (if owner-resolved before TTL) or 'terminated'.
+        Include time_to_remediation_seconds and the revocation_proof block.
+
+  evidence:
+    - agent.discovered event(s)
+    - C04 Commission ticket reference
+    - agent.remediation_outcome event
+    - "revocation proof: idp_revocation_id, gateway_deny_rule_version, network_policy_version"
+
+  exit_criteria: |
+    Every candidate in the backlog has either a C04 record (state in
+    Commissioned, Run, Quiesce, Decommissioned) or a C17 exception record
+    with a non-expired TTL, or has been Terminated with revocation proof.
+
+  escalation: |
+    If termination cannot complete (e.g. IdP unavailable, network policy
+    blocked by another change freeze): page Security Engineering and
+    raise to P1.
+
+
+# ═══════════════════════════════════════════════════════════════════
+# RUNBOOK 8: C18 Quality Gate Outage
+# ═══════════════════════════════════════════════════════════════════
+
+runbook_08:
+  id: RB-08
+  title: C18 quality gate outage
+  trigger: |
+    Any of the following:
+    - Memory Gateway quality gate is unavailable
+    - gate.memory.quality_decision events stop emitting
+    - Quality decision coverage drops below 100%
+    - Memory Gateway returns retrievals without quality_decision_id
+  severity: P2
+  owner: Memory Gateway on-call + Platform Engineering
+
+  steps:
+
+    - step: 1
+      action: Fail-closed
+      detail: |
+        Switch the Memory Gateway to fail-closed for the affected content
+        classes. Options, in order of preference:
+        - Deny all retrievals.
+        - Serve only pre-verified cache items with the stale flag set, so
+          downstream consumers can decide whether to proceed.
+        Do NOT continue serving uncontrolled retrievals.
+
+    - step: 2
+      action: Restore the quality gate
+      detail: |
+        Diagnose the outage. Common causes: signed quality bundle missing
+        or expired, provenance resolver unreachable, quality gate process
+        crash. Restore the service and confirm signed bundle is loaded.
+
+    - step: 3
+      action: Validate coverage returns to 100%
+      detail: |
+        Run Check17 Query 3 (quality_decision coverage). Confirm zero
+        retrievals returned without a quality_decision_id since restoration.
+
+    - step: 4
+      action: Retrospective review
+      detail: |
+        Pull memory access logs for the outage window. Identify any
+        retrievals served without quality gate evaluation. Determine whether
+        any stale-flagged content reached the model and whether any
+        downstream actions (tool calls) should be reviewed.
+
+    - step: 5
+      action: Downstream review
+      detail: |
+        For each tool call traced back to an unevaluated retrieval, decide
+        whether the action stands, requires reversal, or requires customer
+        notification. Document decisions.
+
+  evidence:
+    - Outage event timeline
+    - Coverage metric timeline through the outage window
+    - Retrieval log during outage
+    - Retrospective review record with decisions per tool call
+
+  exit_criteria: |
+    Coverage at 100%. Outage window documented. Downstream review complete
+    with all affected tool calls assessed.
+
+  escalation: |
+    If outage persists beyond 30 minutes: page Memory Gateway service owner
+    and raise to P1. If sensitive content (legal, financial) was potentially
+    served unevaluated: notify GRC and Legal.
+
+
+# ═══════════════════════════════════════════════════════════════════
+# RUNBOOK 9: C19 Drift Response
+# ═══════════════════════════════════════════════════════════════════
+
+runbook_09:
+  id: RB-09
+  title: C19 drift response
+  trigger: |
+    gate.assurance.drift_decision event with decision = drift_detected;
+    drift score crosses configured threshold for the affected dimension.
+  severity: P2  # Promoted to P1 if emergency_stop action triggered
+  owner: AI Platform on-call + Baseline Owner (per c19-rebaselining runbook)
+
+  important_notice: |
+    This runbook MUST NOT begin from an assumption of adversarial cause.
+    That is the C16 adversarial response runbook. Drift is a statistical
+    signal, not an attack. Treat it as a change management problem first.
+
+  steps:
+
+    - step: 1
+      action: Identify drift dimensions
+      detail: |
+        Read the gate.assurance.drift_decision event. Note the dimension(s)
+        that triggered, the statistical_test used, the p_value, and the
+        baseline_hash being compared against.
+
+    - step: 2
+      action: Check for unrecorded ABOM change
+      detail: |
+        Cross-reference the agent's current_abom_hash against its
+        baseline.abom_hash. If they differ but no re-baselining occurred,
+        the trigger is likely an ABOM transition that should have triggered
+        re-baselining. Proceed to step 7 (re-baselining).
+
+    - step: 3
+      action: Check upstream retrieval distribution
+      detail: |
+        Inspect C18 quality posture over the same evaluation window. Look
+        for content_class distribution shifts, freshness flag rate changes,
+        or new sources passing the quality gate. A shift in the retrieval
+        distribution can move the agent's behaviour distribution without
+        any change to the model itself.
+
+    - step: 4
+      action: Check for upstream model changes
+      detail: |
+        Review model provider release notes for any updates that may have
+        shipped under the same version identifier. Some providers update
+        base models in place; this is a known cause of drift without an
+        ABOM change.
+
+    - step: 5
+      action: Apply configured response action
+      detail: |
+        The C19 response router emits the configured action automatically.
+        Operator action: confirm the action took effect.
+        - log_only: continue monitoring.
+        - flag: dashboard update is sufficient.
+        - review_ticket: open the ticket and assign.
+        - tier_reduction: confirm the tier change propagated to the policy
+          engine. Notify the agent owner.
+        - emergency_stop: this is a P1. Confirm side effects are halted.
+          Activate RB-01 for containment.
+
+    - step: 6
+      action: Document response rationale
+      detail: |
+        Record why the configured response was the right action and what
+        evidence informed the choice. Required for audit even when the
+        response is configured-automatic.
+
+    - step: 7
+      action: Decide on re-baselining
+      detail: |
+        If the drift is explained by an ABOM transition: follow the
+        c19-rebaselining runbook (signed approval, ABOM-version trigger).
+        If the drift cannot be explained by ABOM or content distribution:
+        re-baselining without an ABOM change requires an exception with
+        approver identity. Open the exception with rationale or do not
+        re-baseline.
+
+    - step: 8
+      action: Schedule re-evaluation
+      detail: |
+        If tier-reduction was applied: schedule re-evaluation at
+        configured interval (default 7 days). Confirm post-action behaviour
+        either returned to baseline or stabilised at the reduced tier.
+
+  evidence:
+    - gate.assurance.drift_decision event
+    - gate.assurance.response_action event
+    - ABOM version history for the affected agent
+    - C18 quality posture report for the window
+    - Re-baselining log with approver identity (if re-baselined)
+    - Exception record (if non-ABOM re-baselining)
+
+  exit_criteria: |
+    Response action applied and recorded. Root cause identified or escalated
+    to AI Platform leadership. Re-baselining complete or deferred with
+    documented rationale.
+
+  escalation: |
+    If drift cannot be explained and emergency_stop was not configured for
+    the dimension: escalate to AI Platform leadership for human-in-the-loop
+    decision on whether to reduce the agent's autonomy tier manually.

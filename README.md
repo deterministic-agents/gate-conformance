@@ -1,10 +1,10 @@
 # gate-conformance
 
-**GATE conformance checks, self-assessment, and operational runbooks - v1.0.0**
+**GATE conformance checks, self-assessment, and operational runbooks - v1.1.0**
 
-15 conformance checks with test procedures and evidence requirements,
+19 conformance checks with test procedures and evidence requirements,
 a fillable conformance report template, BigQuery evidence correlation
-queries, and 6 operational runbooks for Day-2 operations.
+queries, and 9 operational runbooks for Day-2 operations.
 
 Framework: https://deterministicagents.ai  
 Organisation: https://github.com/deterministic-agents  
@@ -16,10 +16,10 @@ Documentation: CC BY 4.0 - Andrew Stevens · Code: MIT
 
 ```
 gate-conformance/
-├── self_assessment.yaml              # 15 checks with test procedures
+├── self_assessment.yaml              # 19 checks with test procedures
 ├── conformance_report_template.yaml  # Fillable report for audit submission
 ├── evidence_correlation.sql          # BigQuery queries for evidence chain traversal
-└── operational_runbooks.yaml         # 6 Day-2 runbooks
+└── operational_runbooks.yaml         # 9 Day-2 runbooks
 ```
 
 ---
@@ -116,6 +116,12 @@ The CLI conformance runner is in development and will be released with
 GATE v1.3. Until then, `self_assessment.yaml` is the normative manual
 verification baseline. Implementations assessed against this release will
 be considered conformant with GATE v1.2.8 under the versioning policy.
+
+---
+
+## v1.1.0 (2026-06-16)
+
+Compatible with GATE v1.3. Adds Check16-Check19 (C17 / C18 / C19), seven new evidence correlation queries, and three new runbooks (RB-07 C17 candidate backlog, RB-08 C18 quality gate outage, RB-09 C19 drift response). The conformance runner is in development and ships with v1.3.
 
 ---
 
