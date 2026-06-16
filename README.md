@@ -15,7 +15,14 @@ Documentation: CC BY 4.0 - Andrew Stevens · Code: MIT
 
 ## v1.2.0 (2026-06-16)
 
-Adds the conformance runner: `python -m runner.cli run --config gate-conformance.yaml`.
+Compatible with GATE v1.3. First gate-conformance Release Object since
+v1.0.0 - the v1.1.0 tag carried Check16-Check19 (C17 / C18 / C19),
+seven new evidence correlation queries, and three new runbooks (RB-07
+C17 candidate backlog, RB-08 C18 quality gate outage, RB-09 C19 drift
+response) onto main but no Release was cut. v1.2.0 ships that content
+together with the new conformance runner.
+
+Conformance runner: `python -m runner.cli run --config gate-conformance.yaml`.
 Automates 9 of the 19 checks against your evidence store (Check01, 03,
 04, 05, 08, 09, 10, 12, 13) and returns PARTIAL with structured
 `manual_steps` for the other 10. Supports sqlite (built in) and
@@ -167,12 +174,6 @@ evidence-store backend.
 runner and the self-assessment are designed to be used together:
 runner output for the automatable subset, self-assessment for the
 rest.
-
----
-
-## v1.1.0 (2026-06-16)
-
-Compatible with GATE v1.3. Adds Check16-Check19 (C17 / C18 / C19), seven new evidence correlation queries, and three new runbooks (RB-07 C17 candidate backlog, RB-08 C18 quality gate outage, RB-09 C19 drift response).
 
 ---
 
